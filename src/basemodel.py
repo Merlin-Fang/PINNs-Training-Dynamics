@@ -1,4 +1,4 @@
-from typing import Any, Callable, Sequence, Tuple, Optional, Union, Dict
+from typing import Dict
 from functools import partial
 from abc import ABC, abstractmethod
 
@@ -9,7 +9,7 @@ from flax import linen as nn
 from flax.training import train_state
 from jax.tree_util import tree_map, tree_leaves, tree_reduce
 
-from src.models.mlp import MLP
+from src.architectures.mlp import MLP
 
 class TrainState(train_state.TrainState):
     loss_weights: Dict
@@ -53,9 +53,10 @@ class PINNs:
         self.model = create_model(config)
         self.init_state = create_train_state(config)
 
-    @abstractmethod 
     def get_solution(self, params, t, x):
-        pass  # To be implemented in each pde subclass
+        x = jnp.stack([t, x], axis=-1)
+        u = self.model.apply({'params': params}, x)
+        return u[0]
 
     @abstractmethod
     def get_residual(self, params, t, x):
