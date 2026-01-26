@@ -53,11 +53,30 @@ def create_model(config) -> nn.Module:
     )
     return model
 
+def create_optimizer(config):
+    if config.optim.optimizer == "Adam":
+        lr = optax.exponential_decay(
+            init_value=config.optim.learning_rate,
+            transition_steps=config.optim.decay_steps,
+            decay_rate=config.optim.decay_rate,
+        )
+        tx = optax.adam(
+            learning_rate=lr, b1=config.optim.beta1, b2=config.optim.beta2, eps=config.optim.eps
+        )
+
+    else:
+        raise NotImplementedError(f"Optimizer {config.optim.optimizer} not supported yet!")
+
+    if config.optim.grad_accum_steps > 1:
+        tx = optax.MultiSteps(tx, every_k_schedule=config.optim.grad_accum_steps)
+
+    return tx
+
 def create_train_state(config):
     model = create_model(config)
     dummy = jnp.ones((2,))
     params = model.init(jax.random.PRNGKey(0), dummy)["params"]
-    tx = optax.adam(config.training.learning_rate)
+    tx = create_optimizer(config)
 
     init_loss_weights = {
         k: jnp.array(float(v)) for k, v in dict(config.training.loss_weights).items()
@@ -118,7 +137,7 @@ class PINNs:
             loss_weights = tree_map(lambda x: mean_ntk / (x + 1e-8), mean_ntk_per_loss)
         else:
             diag_ntk = self.get_diag_ntk(params, batch)
-            loss_weights = tree_map(lambda _: jnp.array(1.0), mean_ntk)
+            loss_weights = tree_map(lambda _: jnp.array(1.0), diag_ntk)
 
         mean_ntk = tree_map(lambda x: jnp.mean(x), diag_ntk)
         return loss_weights, mean_ntk
@@ -174,7 +193,7 @@ class PINNs:
 
             fig = plt.figure(figsize=(6, 5))
             u_pred_np = jax.device_get(u_pred)
-            plt.imshow(u_pred_np.T, cmap="jet")
+            plt.imshow(u_pred_np, cmap="jet")
             log_dict["u_pred"] = fig
             plt.close(fig)
 
