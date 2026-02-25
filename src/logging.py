@@ -43,7 +43,7 @@ class Logger:
         log_items = [
             [key, f"{log_dict[key]:.6f}"]
             for key in log_dict.keys()
-            if not key.endswith("pred")
+            if not key.endswith("pred") or key.endswith("term")
         ]
 
         message = tabulate(

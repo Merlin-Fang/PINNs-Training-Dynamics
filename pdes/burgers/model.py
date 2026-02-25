@@ -1,7 +1,8 @@
 from jax import lax, pmap, jit, grad, vmap
 import jax.numpy as jnp
 
-from src.basemodel import PINNs
+from basemodels.corrpinns import CorrPINNs
+from basemodels.pinns import PINNs
 
 class Burgers(PINNs):
     """
@@ -21,3 +22,33 @@ class Burgers(PINNs):
         residual = u_t + u * u_x - self.v * u_xx
         return residual
     
+class Burgers_Corr(CorrPINNs, Burgers):
+    """
+    Corr-net trainer for Burgers equation.
+
+    Reuses Burgers.get_residual(...) (which calls self.get_solution).
+    CorrPINNs supplies self.get_solution (u_base + wconf*u_corr) and corr losses/step.
+    """
+
+    def __init__(
+        self,
+        config,
+        IC,
+        *,
+        base_params,
+        corr_assets,
+        frozen_loss_weights,
+        alpha_schedule=None,
+    ):
+        # initialize CorrPINNs (sets up base_model, corr_model, state, assets, weights, schedule)
+        CorrPINNs.__init__(
+            self,
+            config,
+            IC,
+            base_params=base_params,
+            corr_assets=corr_assets,
+            frozen_loss_weights=frozen_loss_weights,
+            alpha_schedule=alpha_schedule,
+        )
+
+        self.v = 0.01 / jnp.pi

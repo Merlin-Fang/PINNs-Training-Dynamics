@@ -10,6 +10,11 @@ ckpts/*
 wandb/*
 run.sh
 src/configs/default.py
+src/plot_progression.py
+nohup.out
+src/error_predictor.py
+src/testing.py
+pdes/allen_cahn/corr_assets
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

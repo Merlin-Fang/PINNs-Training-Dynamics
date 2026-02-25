@@ -1,4 +1,6 @@
 import jax
+
+from training import train
 jax.config.update("jax_default_matmul_precision", "highest")
 
 from absl import app
@@ -6,7 +8,7 @@ from absl import flags
 
 from ml_collections import config_flags
 
-from src import train, evaluate
+from src import evaluate
 
 FLAGS = flags.FLAGS
 
@@ -18,8 +20,12 @@ config_flags.DEFINE_config_file(
 )
 
 def main(argv):
-    model, ckptdir = train.train(FLAGS.config)
-    evaluate.eval(FLAGS.config, ckptdir, model)
+    if "corr" not in FLAGS.config:
+        model, ckptdir = train.train(FLAGS.config)
+        evaluate.eval(FLAGS.config, ckptdir, model)
+    else:
+        model, ckptdir = train.train(FLAGS.config)
+        evaluate.eval_corr(FLAGS.config, ckptdir, model)
 
 if __name__ == "__main__":
     flags.mark_flags_as_required(["config"])
