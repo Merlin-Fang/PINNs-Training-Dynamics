@@ -6,13 +6,13 @@ def get_config():
 
     config.pde = ConfigDict()
     config.pde.name = 'allen_cahn'
-    config.pde.run = 'corr_test_1'
+    config.pde.run = 'corr_test_0'
     config.pde.experiment = config.pde.name + '_' + config.pde.run
 
     config.corr = ConfigDict()
-    config.corr.base_ckptdir = 'ckpts/allen_cahn/allen_cahn_uniform_sampling'
+    config.corr.base_ckptdir = '/scratch/merlinf/repos/PINNs-Training-Dynamics/ckpts/allen_cahn/allen_cahn_uniform_sampling'
     config.corr.base_step = 199000
-    config.corr.assets_path = 'pdes/allen_cahn/corr_assets/corr_assets_early101000_late199000.npz'
+    config.corr.assets_path = '/scratch/merlinf/repos/PINNs-Training-Dynamics/pdes/allen_cahn/corr_assets/corr_assets_early101000_late199000.npz'
     config.corr.alpha_schedule = {
         "type": "sigmoid",  # "linear" | "cosine" | "sigmoid"
         "a0": 1.0,
@@ -35,8 +35,8 @@ def get_config():
     config.training.seed = 42
     config.training.global_batch_size = 4096
     config.training.batch_size_per_device = 1024
-    config.training.num_steps = 200000
-    config.training.save_freq = 0
+    config.training.num_steps = 2000#00
+    config.training.save_freq = None
 
     config.optim = ConfigDict()
     config.optim.grad_accum_steps = 0
@@ -66,5 +66,16 @@ def get_config():
     config.logging.log_pinns_loss = True
     config.logging.log_IC_res_loss = True
     config.logging.log_L2error = True
+
+    # ---- dummy variables (value does not matter, only for structure for base state) ----
+    config.training.loss_weights = {"ic": 1.0, "res": 1.0}
+    config.training.momentum = 0.9
+    config.sampling = ConfigDict()
+    config.sampling.method = 'uniform'
+    config.sampling.hard_bank_mult = 50
+    config.sampling.cand_mult = 50
+    config.sampling.top_frac = 0.05
+    config.sampling.hardness = "abs"
+    config.sampling.refresh_freq = 200
 
     return config

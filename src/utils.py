@@ -38,45 +38,49 @@ def interp2d_grid(
     x_query: jnp.ndarray,
     eps: float = 1e-12,
 ) -> jnp.ndarray:
-    """JAX-compatible bilinear interpolation on a (t,x) grid.
+    """
+    JAX-compatible bilinear interpolation on a (t,x) grid.
 
     Args:
-        t_grid: (Nt,) monotonic increasing 1D grid.
-        x_grid: (Nx,) monotonic increasing 1D grid.
-        Z:      (Nt, Nx) values defined on the grid.
-        t_query:(B,) query t values.
-        x_query:(B,) query x values.
-        eps:    small constant to avoid divide-by-zero.
+        t_grid:   (Nt,) monotonic increasing 1D grid.
+        x_grid:   (Nx,) monotonic increasing 1D grid.
+        Z:        (Nt, Nx) values defined on the grid.
+        t_query:  (B,) (or any shape) query t values.
+        x_query:  (B,) (or any shape) query x values.
+        eps:      small constant to avoid divide-by-zero.
 
     Returns:
-        Zq: (B,) interpolated values.
-
+        Zq: (B,) interpolated values (flattened to 1D).
     Notes:
         - Out-of-range queries are clipped to the grid bounds.
         - Uses only JAX ops (jit/pmap safe).
+        - Works inside a pmapped train_step without needing its own pmap.
     """
-    # Ensure rank-1 queries
-    t_query = jnp.asarray(t_query).reshape(-1)
-    x_query = jnp.asarray(x_query).reshape(-1)
-
+    # Ensure arrays + flatten queries to (B,)
     t_grid = jnp.asarray(t_grid)
     x_grid = jnp.asarray(x_grid)
     Z = jnp.asarray(Z)
+
+    tq = jnp.ravel(jnp.asarray(t_query))
+    xq = jnp.ravel(jnp.asarray(x_query))
 
     Nt = t_grid.shape[0]
     Nx = x_grid.shape[0]
 
     # Clip queries to valid domain so indices are safe.
-    tq = jnp.clip(t_query, t_grid[0], t_grid[-1])
-    xq = jnp.clip(x_query, x_grid[0], x_grid[-1])
+    tq = jnp.clip(tq, t_grid[0], t_grid[-1])
+    xq = jnp.clip(xq, x_grid[0], x_grid[-1])
 
-    # Cell indices (lower corner). searchsorted gives insertion index.
+    # Lower-cell indices (searchsorted gives insertion index).
+    # side="right": values equal to a grid point map to the cell on the left.
     it = jnp.searchsorted(t_grid, tq, side="right") - 1
     ix = jnp.searchsorted(x_grid, xq, side="right") - 1
+
+    # Clamp to valid cell range (0..Nt-2), (0..Nx-2)
     it = jnp.clip(it, 0, Nt - 2)
     ix = jnp.clip(ix, 0, Nx - 2)
 
-    # Grid coordinates
+    # Grid coordinates for the cell corners
     t0 = t_grid[it]
     t1 = t_grid[it + 1]
     x0 = x_grid[ix]

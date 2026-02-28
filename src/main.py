@@ -1,6 +1,8 @@
 import jax
 
-from training import train
+from src.training import train
+from src.training import train_corr
+
 jax.config.update("jax_default_matmul_precision", "highest")
 
 from absl import app
@@ -24,7 +26,7 @@ def main(argv):
         model, ckptdir = train.train(FLAGS.config)
         evaluate.eval(FLAGS.config, ckptdir, model)
     else:
-        model, ckptdir = train.train(FLAGS.config)
+        model, ckptdir = train_corr.train_corr(FLAGS.config)
         evaluate.eval_corr(FLAGS.config, ckptdir, model)
 
 if __name__ == "__main__":

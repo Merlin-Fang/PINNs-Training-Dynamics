@@ -4,7 +4,7 @@ import time
 
 import jax
 import jax.numpy as jnp
-from jax.tree_util import tree_map
+from jax.tree_util import tree_map, tree_leaves
 
 import numpy as np
 import ml_collections
@@ -113,16 +113,22 @@ def train_corr(config: ml_collections.ConfigDict):
         )
     frozen_loss_weights = base_state.loss_weights  # expects keys like {"ic":..., "res":...}
 
+    # ---- Debug ----
+    def _leaf_shapes(pytree):
+        return [getattr(x, "shape", None) for x in tree_leaves(pytree)]
+
+    print("[DEBUG] base_params leaf shapes (first 8):", _leaf_shapes(base_params)[:8])
+    print("[DEBUG] frozen_loss_weights:", frozen_loss_weights)
+    # ---- Debug ----
+
     # ---- Load corr assets ----
     corr_assets = _load_corr_assets_npz(config.corr.assets_path)
 
-    # ---- Replicate frozen things for pmap ----
-    # CorrPINNs uses these inside a pmapped train_step, so they must be device arrays.
-    base_params_repl = jax_utils.replicate(base_params)
-    corr_assets_repl = {k: jax_utils.replicate(v) for k, v in corr_assets.items()}
+    # ---- Debug ----
+    print("[DEBUG] corr_assets shapes (unreplicated):", {k: v.shape for k, v in corr_assets.items()})
+    # ---- Debug ----
 
     # Frozen weights are scalars; CorrPINNs converts them to jnp inside __init__ anyway.
-    # Keep them as plain floats here for simplicity.
     frozen_w = {
         "ic": float(frozen_loss_weights["ic"]),
         "res": float(frozen_loss_weights["res"]),
@@ -135,11 +141,21 @@ def train_corr(config: ml_collections.ConfigDict):
     model = CorrModelClass(
         config,
         IC,
-        base_params=base_params_repl,
-        corr_assets=corr_assets_repl,
+        base_params=base_params,        # <-- passed into CorrTrainState inside CorrPINNs now
+        corr_assets=corr_assets,
         frozen_loss_weights=frozen_w,
         alpha_schedule=alpha_schedule,
     )
+
+    # ---- Debug ----
+    print("[DEBUG] model.t_grid.shape:", getattr(model, "t_grid", None).shape)
+    print("[DEBUG] model.teacher_map.shape:", getattr(model, "teacher_map", None).shape)
+
+    # base params live in the wrapper-state now
+    state0 = jax_utils.unreplicate(model.state)
+    print("[DEBUG] model.state.base_params leaf[0] shape:",
+          getattr(tree_leaves(state0.base_params)[0], "shape", None))
+    # ---- Debug ----
 
     # ---- Sampler (uniform only, same structure as base train) ----
     per_device_batch_size = (
@@ -157,6 +173,11 @@ def train_corr(config: ml_collections.ConfigDict):
     # ---- Output dir ----
     save_dir = os.path.join(workdir, "ckpts", config.pde.name, experiment_name)
 
+    # ---- Debug ----
+    print("[DEBUG] model.t_grid.shape:", model.t_grid.shape)
+    print("[DEBUG] model.teacher_map.shape:", model.teacher_map.shape)
+    # ---- Debug ----
+
     print("Waiting for jit...")
 
     start_time = time.time()
@@ -170,9 +191,19 @@ def train_corr(config: ml_collections.ConfigDict):
     denom = max(num_steps - 1, 1)
 
     for step in pbar:
-        batch = sampler[0]  # should be sharded: (n_devices, per_device_batch, 2)
+        batch = sampler[0]  # sharded: (n_devices, per_device_batch, 2)
 
-        progress = float(step / denom)  # percentile in [0,1]
+        # ---- Debug ----
+        print("[DEBUG] batch.shape:", batch.shape)
+        b0 = jax.device_get(batch[0])
+        print(
+            "[DEBUG] batch[0].shape host:", b0.shape,
+            "t range:", (float(b0[:, 0].min()), float(b0[:, 0].max())),
+            "x range:", (float(b0[:, 1].min()), float(b0[:, 1].max()))
+        )
+        # ---- Debug ----
+
+        progress = jnp.array(step / denom, dtype=jnp.float32)  # <-- make it an array (broadcastable)
         model.state = model.train_step(model.state, batch, progress)
 
         if step % config.logging.freq == 0:
@@ -184,7 +215,6 @@ def train_corr(config: ml_collections.ConfigDict):
             if config.wandb.use:
                 wandb.log(log_dict, step)
 
-            # show something lightweight in tqdm
             pbar.set_postfix({"L2_error": float(log_dict.get("l2_error", 0.0))})
 
             end_time = time.time()

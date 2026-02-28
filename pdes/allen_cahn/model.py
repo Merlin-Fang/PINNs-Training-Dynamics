@@ -1,8 +1,8 @@
 from jax import grad
 import jax.numpy as jnp
 
-from basemodels.pinns import PINNs
-from basemodels.corrpinns import CorrPINNs
+from src.basemodels.pinns import PINNs
+from src.basemodels.corrpinns import CorrPINNs
 
 class Allen_Cahn(PINNs):
     """
@@ -23,11 +23,9 @@ class Allen_Cahn(PINNs):
         residual = u_t - self.a * u - self.v * u_xx + self.a * (u ** 3)
         return residual
 
-class Allen_Cahn_Corr(CorrPINNs, Allen_Cahn):
+class Allen_Cahn_Corr(CorrPINNs):
     """
     Corr-net trainer for Allen–Cahn.
-
-    Reuses Allen_Cahn.get_residual(...) (which calls self.get_solution).
     CorrPINNs supplies self.get_solution (u_base + wconf*u_corr) and corr losses/step.
     """
 
@@ -55,3 +53,16 @@ class Allen_Cahn_Corr(CorrPINNs, Allen_Cahn):
         # Allen–Cahn constants (same as Allen_Cahn.__init__)
         self.a = 5.0
         self.v = 1e-4
+
+    def get_residual(self, params_corr, base_params, t, x):
+        # residual uses corrected solution
+        u = self.get_solution(params_corr, base_params, t, x)
+
+        # then whatever Allen-Cahn residual you already had, but computed from u
+        # Example skeleton (you must match your existing Allen_Cahn residual math):
+        u_t = grad(lambda tt: self.get_solution(params_corr, base_params, tt, x))(t)
+        u_x = grad(lambda xx: self.get_solution(params_corr, base_params, t, xx))(x)
+        u_xx = grad(lambda xx: grad(lambda yy: self.get_solution(params_corr, base_params, t, yy))(xx))(x)
+
+        # return the PDE residual expression (use yours)
+        return u_t - 0.0001 * u_xx + 5.0 * u - 5.0 * (u ** 3)

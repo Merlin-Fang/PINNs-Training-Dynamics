@@ -1,8 +1,8 @@
 from jax import lax, pmap, jit, grad, vmap
 import jax.numpy as jnp
 
-from basemodels.corrpinns import CorrPINNs
-from basemodels.pinns import PINNs
+from src.basemodels.corrpinns import CorrPINNs
+from src.basemodels.pinns import PINNs
 
 class Burgers(PINNs):
     """
