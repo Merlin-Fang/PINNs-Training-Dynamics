@@ -212,6 +212,19 @@ class CorrPINNs:
         # scalar query -> interp returns (1,), index [0] ok
         w = interp2d_grid(self.t_grid, self.x_grid, self.wconf_map, t, x)[0]
         return u_base + w * u_corr
+    
+    def get_unweighed_solution(self, params_corr, base_params, t, x):
+        """
+        Corrected solution:
+          u_hat = u_base + wconf(t,x) * u_corr
+        """
+        inp = jnp.stack([t, x])  # (2,)
+
+        u_base = self.base_model.apply({"params": base_params}, inp)[0]
+        u_corr, _g = self.corr_model.apply({"params": params_corr}, inp)
+        u_corr = u_corr[0]
+
+        return u_base + u_corr
 
     @abstractmethod
     def get_residual(self, params_corr, base_params, t, x):
@@ -230,7 +243,7 @@ class CorrPINNs:
         Physics losses (IC + residual) computed on corrected solution.
         """
         # IC loss: evaluate corrected solution on IC points
-        u0_pred = vmap(self.get_solution, in_axes=(None, None, 0, 0))(
+        u0_pred = vmap(self.get_unweighed_solution, in_axes=(None, None, 0, 0))(
             params_corr, base_params, self.IC[1], self.IC[2]
         )
         ic_loss = jnp.mean((u0_pred - self.IC[0]) ** 2)
@@ -252,7 +265,9 @@ class CorrPINNs:
     def get_teacher_loss(self, params_corr, batch):
         """
         Teacher loss:
-          E[ wconf(t,x) * (g*u_corr - teacher)^2 ]
+        sum_i wconf(t_i, x_i) * (g*u_corr - teacher)^2
+        ------------------------------------------------
+                sum_i wconf(t_i, x_i) + eps
         """
         t = batch[:, 0]
         x = batch[:, 1]
@@ -263,11 +278,15 @@ class CorrPINNs:
         def corr_forward(ti, xi):
             inp = jnp.stack([ti, xi])   # (2,)
             u_corr, g = self.corr_model.apply({"params": params_corr}, inp)
-            return u_corr[0], g         # scalar, scalar
+            return u_corr[0], g
 
         u_corr, g = vmap(corr_forward, in_axes=(0, 0))(t, x)  # (B,), (B,)
         diff = (g * u_corr) - teacher
-        return jnp.mean(wconf * (diff ** 2)), g[0]
+
+        eps = 1e-12
+        teacher_loss = jnp.sum(wconf * (diff ** 2)) / (jnp.sum(wconf) + eps)
+
+        return teacher_loss, g[0]
 
     # --------------------------
     # Total loss (mixture)
@@ -284,7 +303,10 @@ class CorrPINNs:
         alpha = self.calc_alpha(progress)
         L_teacher, _g = self.get_teacher_loss(params_corr, batch)
         L_pinns, _losses = self.get_pinns_loss(params_corr, base_params, batch)
-        return alpha * L_teacher + (1.0 - alpha) * L_pinns
+
+        lambda_teacher = 300 # Heruistic constant scaling teacher loss to be roughly same magnitude as pinns loss at start of training; adjust as needed
+
+        return alpha * lambda_teacher * L_teacher + (1.0 - alpha) * L_pinns
 
     # --------------------------
     # Train step (pmapped)
@@ -373,23 +395,60 @@ class CorrPINNs:
             l2_error = jnp.linalg.norm(u_hat - u_ref) / (jnp.linalg.norm(u_ref) + 1e-12)
             log_dict["l2_error"] = l2_error
 
-        # Figure: ONLY |wconf * u_corr|
-        def corr_term_single(ti, xi):
+        # Figures:
+        #   1) raw corr-net output u_corr (signed)
+        #   2) applied signed correction wconf * u_corr
+        #   3) corrected signed error u_ref - (u_base + wconf * u_corr)
+
+        def fields_single(ti, xi):
             inp = jnp.stack([ti, xi])
+
+            u_base = self.base_model.apply({"params": base_params}, inp)[0]
+
             u_corr, _g2 = self.corr_model.apply({"params": params_corr}, inp)
             u_corr = u_corr[0]
-            w = interp2d_grid(self.t_grid, self.x_grid, self.wconf_map, ti, xi)[0]
-            return jnp.abs(w * u_corr)
 
-        corr_term = vmap(
-            vmap(corr_term_single, in_axes=(0, None)),
-            in_axes=(None, 0),
+            w = interp2d_grid(self.t_grid, self.x_grid, self.wconf_map, ti, xi)[0]
+            corr_term = w * u_corr
+            return u_base, u_corr, corr_term
+
+        # shape: (Nt, Nx) because outer vmap is over t, inner is over x
+        u_base_grid, u_corr_grid, corr_term_grid = vmap(
+            vmap(fields_single, in_axes=(None, 0)),
+            in_axes=(0, None),
         )(t, x)
 
+        u_hat_grid = u_base_grid + corr_term_grid
+        corrected_signed_error = u_ref - u_hat_grid
+
+        # 1) raw corr-net output (signed)
+        u_corr_np = jax.device_get(u_corr_grid)
+        vmax = float(jnp.max(jnp.abs(u_corr_grid)))
         fig = plt.figure(figsize=(6, 5))
-        corr_term_np = jax.device_get(corr_term)
-        plt.imshow(corr_term_np, cmap="jet")
-        log_dict["corr_term"] = fig
+        plt.imshow(u_corr_np, cmap="seismic", vmin=-vmax, vmax=vmax)
+        plt.colorbar()
+        plt.title("u_corr")
+        log_dict["raw_corr_plt"] = fig
+        plt.close(fig)
+
+        # 2) applied signed correction (signed)
+        corr_term_np = jax.device_get(corr_term_grid)
+        vmax = float(jnp.max(jnp.abs(corr_term_grid)))
+        fig = plt.figure(figsize=(6, 5))
+        plt.imshow(corr_term_np, cmap="seismic", vmin=-vmax, vmax=vmax)
+        plt.colorbar()
+        plt.title("w * u_corr")
+        log_dict["weighted_corr_plt"] = fig
+        plt.close(fig)
+
+        # 3) corrected signed error = u_ref - u_hat
+        corrected_signed_error_np = jax.device_get(corrected_signed_error)
+        vmax = float(jnp.max(jnp.abs(corrected_signed_error)))
+        fig = plt.figure(figsize=(6, 5))
+        plt.imshow(corrected_signed_error_np, cmap="seismic", vmin=-vmax, vmax=vmax)
+        plt.colorbar()
+        plt.title("u_ref - (u_base + w * u_corr)")
+        log_dict["corrected_signed_error_plt"] = fig
         plt.close(fig)
 
         return log_dict

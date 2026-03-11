@@ -1,6 +1,7 @@
 # train_corr.py
 import os
 import time
+from datetime import datetime
 
 import jax
 import jax.numpy as jnp
@@ -113,20 +114,20 @@ def train_corr(config: ml_collections.ConfigDict):
         )
     frozen_loss_weights = base_state.loss_weights  # expects keys like {"ic":..., "res":...}
 
-    # ---- Debug ----
-    def _leaf_shapes(pytree):
-        return [getattr(x, "shape", None) for x in tree_leaves(pytree)]
+    # # ---- Debug ----
+    # def _leaf_shapes(pytree):
+    #     return [getattr(x, "shape", None) for x in tree_leaves(pytree)]
 
-    print("[DEBUG] base_params leaf shapes (first 8):", _leaf_shapes(base_params)[:8])
-    print("[DEBUG] frozen_loss_weights:", frozen_loss_weights)
-    # ---- Debug ----
+    # print("[DEBUG] base_params leaf shapes (first 8):", _leaf_shapes(base_params)[:8])
+    # print("[DEBUG] frozen_loss_weights:", frozen_loss_weights)
+    # # ---- Debug ----
 
     # ---- Load corr assets ----
     corr_assets = _load_corr_assets_npz(config.corr.assets_path)
 
-    # ---- Debug ----
-    print("[DEBUG] corr_assets shapes (unreplicated):", {k: v.shape for k, v in corr_assets.items()})
-    # ---- Debug ----
+    # # ---- Debug ----
+    # print("[DEBUG] corr_assets shapes (unreplicated):", {k: v.shape for k, v in corr_assets.items()})
+    # # ---- Debug ----
 
     # Frozen weights are scalars; CorrPINNs converts them to jnp inside __init__ anyway.
     frozen_w = {
@@ -147,15 +148,15 @@ def train_corr(config: ml_collections.ConfigDict):
         alpha_schedule=alpha_schedule,
     )
 
-    # ---- Debug ----
-    print("[DEBUG] model.t_grid.shape:", getattr(model, "t_grid", None).shape)
-    print("[DEBUG] model.teacher_map.shape:", getattr(model, "teacher_map", None).shape)
+    # # ---- Debug ----
+    # print("[DEBUG] model.t_grid.shape:", getattr(model, "t_grid", None).shape)
+    # print("[DEBUG] model.teacher_map.shape:", getattr(model, "teacher_map", None).shape)
 
-    # base params live in the wrapper-state now
-    state0 = jax_utils.unreplicate(model.state)
-    print("[DEBUG] model.state.base_params leaf[0] shape:",
-          getattr(tree_leaves(state0.base_params)[0], "shape", None))
-    # ---- Debug ----
+    # # base params live in the wrapper-state now
+    # state0 = jax_utils.unreplicate(model.state)
+    # print("[DEBUG] model.state.base_params leaf[0] shape:",
+    #       getattr(tree_leaves(state0.base_params)[0], "shape", None))
+    # # ---- Debug ----
 
     # ---- Sampler (uniform only, same structure as base train) ----
     per_device_batch_size = (
@@ -171,12 +172,20 @@ def train_corr(config: ml_collections.ConfigDict):
     )
 
     # ---- Output dir ----
-    save_dir = os.path.join(workdir, "ckpts", config.pde.name, experiment_name)
+    ckpt_root = os.path.join(workdir, "ckpts", config.pde.name)
 
-    # ---- Debug ----
-    print("[DEBUG] model.t_grid.shape:", model.t_grid.shape)
-    print("[DEBUG] model.teacher_map.shape:", model.teacher_map.shape)
-    # ---- Debug ----
+    os.makedirs(ckpt_root, exist_ok=True)
+
+    run_id = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    save_dir = os.path.join(ckpt_root, f"{config.pde.experiment}_{run_id}")
+
+    os.makedirs(save_dir, exist_ok=True)
+    print(f"[ckpt] saving to {save_dir}")
+
+    # # ---- Debug ----
+    # print("[DEBUG] model.t_grid.shape:", model.t_grid.shape)
+    # print("[DEBUG] model.teacher_map.shape:", model.teacher_map.shape)
+    # # ---- Debug ----
 
     print("Waiting for jit...")
 
@@ -193,20 +202,20 @@ def train_corr(config: ml_collections.ConfigDict):
     for step in pbar:
         batch = sampler[0]  # sharded: (n_devices, per_device_batch, 2)
 
-        # ---- Debug ----
-        print("[DEBUG] batch.shape:", batch.shape)
-        b0 = jax.device_get(batch[0])
-        print(
-            "[DEBUG] batch[0].shape host:", b0.shape,
-            "t range:", (float(b0[:, 0].min()), float(b0[:, 0].max())),
-            "x range:", (float(b0[:, 1].min()), float(b0[:, 1].max()))
-        )
-        # ---- Debug ----
+        # # ---- Debug ----
+        # print("[DEBUG] batch.shape:", batch.shape)
+        # b0 = jax.device_get(batch[0])
+        # print(
+        #     "[DEBUG] batch[0].shape host:", b0.shape,
+        #     "t range:", (float(b0[:, 0].min()), float(b0[:, 0].max())),
+        #     "x range:", (float(b0[:, 1].min()), float(b0[:, 1].max()))
+        # )
+        # # ---- Debug ----
 
         progress = jnp.array(step / denom, dtype=jnp.float32)  # <-- make it an array (broadcastable)
         model.state = model.train_step(model.state, batch, progress)
 
-        if step % config.logging.freq == 0:
+        if step > 0 and step % config.logging.freq == 0:
             state_host = jax.device_get(tree_map(lambda x: x[0], model.state))
             batch_host = jax.device_get(tree_map(lambda x: x[0], batch))
 

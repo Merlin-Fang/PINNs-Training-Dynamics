@@ -6,7 +6,7 @@ def get_config():
 
     config.pde = ConfigDict()
     config.pde.name = 'allen_cahn'
-    config.pde.run = 'corr_test_0'
+    config.pde.run = 'corr_lambda300_normalizedTeacherLoss'
     config.pde.experiment = config.pde.name + '_' + config.pde.run
 
     config.corr = ConfigDict()
@@ -16,8 +16,8 @@ def get_config():
     config.corr.alpha_schedule = {
         "type": "sigmoid",  # "linear" | "cosine" | "sigmoid"
         "a0": 1.0,
-        "a1": 0.0,
-        "t0": 0.1,
+        "a1": 0.2,
+        "t0": 0.3,
         "t1": 0.6,
         "k": 10.0,          # only used by sigmoid; higher = sharper transition
     }
@@ -35,7 +35,7 @@ def get_config():
     config.training.seed = 42
     config.training.global_batch_size = 4096
     config.training.batch_size_per_device = 1024
-    config.training.num_steps = 2000#00
+    config.training.num_steps = 50000
     config.training.save_freq = None
 
     config.optim = ConfigDict()
@@ -44,12 +44,12 @@ def get_config():
     config.optim.beta1 = 0.9
     config.optim.beta2 = 0.999
     config.optim.eps = 1e-8
-    config.optim.learning_rate = 1e-3
+    config.optim.learning_rate = 3e-4
     config.optim.decay_rate = 0.9
     config.optim.decay_steps = 2000
 
     config.wandb = ConfigDict()
-    config.wandb.use = False
+    config.wandb.use = True
     config.wandb.project = 'PINNs-Correction-Net'
 
     config.logging = ConfigDict()

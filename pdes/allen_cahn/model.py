@@ -55,14 +55,11 @@ class Allen_Cahn_Corr(CorrPINNs):
         self.v = 1e-4
 
     def get_residual(self, params_corr, base_params, t, x):
-        # residual uses corrected solution
         u = self.get_solution(params_corr, base_params, t, x)
 
-        # then whatever Allen-Cahn residual you already had, but computed from u
-        # Example skeleton (you must match your existing Allen_Cahn residual math):
         u_t = grad(lambda tt: self.get_solution(params_corr, base_params, tt, x))(t)
-        u_x = grad(lambda xx: self.get_solution(params_corr, base_params, t, xx))(x)
-        u_xx = grad(lambda xx: grad(lambda yy: self.get_solution(params_corr, base_params, t, yy))(xx))(x)
+        u_xx = grad(
+            grad(lambda xx: self.get_solution(params_corr, base_params, t, xx))
+        )(x)
 
-        # return the PDE residual expression (use yours)
-        return u_t - 0.0001 * u_xx + 5.0 * u - 5.0 * (u ** 3)
+        return u_t - self.a * u - self.v * u_xx + self.a * (u ** 3)

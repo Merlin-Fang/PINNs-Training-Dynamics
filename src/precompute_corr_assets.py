@@ -230,7 +230,7 @@ def make_teacher_map_from_delta(
         gate = gate ** params.p
 
     Z = d * gate
-    Z = _tanh_compress(Z, scale_q=params.tanh_scale_q, beta=params.tanh_beta, eps=eps)
+    # Z = _tanh_compress(Z, scale_q=params.tanh_scale_q, beta=params.tanh_beta, eps=eps)
     return Z.astype(np.float32)
 
 
