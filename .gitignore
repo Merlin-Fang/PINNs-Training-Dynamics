@@ -15,6 +15,7 @@ nohup.out
 src/error_predictor.py
 src/testing.py
 pdes/allen_cahn/corr_assets
+pdes/burgers/corr_assets
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

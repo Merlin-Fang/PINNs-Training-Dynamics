@@ -5,14 +5,14 @@ def get_config():
     config = ConfigDict()
 
     config.pde = ConfigDict()
-    config.pde.name = 'allen_cahn'
+    config.pde.name = 'burgers'
     config.pde.run = 'corr_gradNorm'
     config.pde.experiment = config.pde.name + '_' + config.pde.run
 
     config.corr = ConfigDict()
-    config.corr.base_ckptdir = '/scratch/merlinf/repos/PINNs-Training-Dynamics/ckpts/allen_cahn/allen_cahn_uniform_sampling'
+    config.corr.base_ckptdir = '/scratch/merlinf/repos/PINNs-Training-Dynamics/ckpts/burgers/burgers_uniform_sampling'
     config.corr.base_step = 199000
-    config.corr.assets_path = '/scratch/merlinf/repos/PINNs-Training-Dynamics/pdes/allen_cahn/corr_assets/corr_assets_early101000_late199000.npz'
+    config.corr.assets_path = '/scratch/merlinf/repos/PINNs-Training-Dynamics/pdes/burgers/corr_assets/corr_assets_early101000_late199000.npz'
     config.corr.alpha_schedule = {
         "type": "sigmoid",  # "linear" | "cosine" | "sigmoid"
         "a0": 1.0,

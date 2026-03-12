@@ -4,7 +4,7 @@ from abc import abstractmethod
 
 import jax
 import optax
-from jax import lax, pmap, jit, grad, vmap
+from jax import jacrev, lax, pmap, jit, grad, tree_leaves, vmap
 import jax.numpy as jnp
 from flax import linen as nn
 from flax import jax_utils
@@ -12,6 +12,7 @@ from flax.training import train_state
 from flax.core import freeze
 
 from jax.tree_util import tree_map, tree_reduce
+from jax.flatten_util import ravel_pytree
 
 from src.architectures.mlp import MLP
 from src.architectures.corr_mlp import CorrMLP
@@ -96,6 +97,30 @@ def create_optimizer(config):
 # ---------------------------------------------------------------------
 class CorrTrainState(train_state.TrainState):
     base_params: Dict  # pytree of arrays (FrozenDict typically)
+    weights: Dict # dict of loss weights (e.g. for teacher and pinns losses); updated by gradnorm, used in get_total_loss
+    momentum: float
+
+    def apply_weights(self, weights):
+        """Updates `weights` using running average  in return value.
+
+        Returns:
+          An updated instance of `self` with new weights updated by applying `running_average`,
+          and additional attributes replaced as specified by `kwargs`.
+        """
+
+        running_average = (
+            lambda old_w, new_w: old_w * self.momentum + (1 - self.momentum) * new_w
+        )
+        weights = tree_map(running_average, self.weights, weights)
+        weights = lax.stop_gradient(weights)
+
+        return self.replace(
+            step=self.step,
+            params=self.params,
+            opt_state=self.opt_state,
+            base_params=self.base_params,
+            weights=weights,
+        )
 
 
 def create_corr_train_state(config, corr_model: nn.Module, base_params):
@@ -107,12 +132,15 @@ def create_corr_train_state(config, corr_model: nn.Module, base_params):
     dummy = jnp.ones((2,))
     params = corr_model.init(jax.random.PRNGKey(0), dummy)["params"]
     tx = create_optimizer(config)
+    init_weights = dict(config.corr.init_weights)
 
     state = CorrTrainState.create(
         apply_fn=corr_model.apply,
         params=params,
         tx=tx,
         base_params=base_params,
+        weights=init_weights,
+        momentum=config.corr.momentum,
     )
     return jax_utils.replicate(state)
 
@@ -161,7 +189,7 @@ class CorrPINNs:
     # --------------------------
     # Alpha schedule
     # --------------------------
-    def calc_alpha(self, progress: jnp.ndarray) -> jnp.ndarray:
+    def calc_schedule_weights(self, progress: jnp.ndarray):
         p = jnp.clip(progress, 0.0, 1.0)
         sch = self.alpha_schedule
         sch_type = sch.get("type", "linear")
@@ -193,7 +221,9 @@ class CorrPINNs:
 
         a_mid = a0 + (a1 - a0) * curve
         alpha = jnp.where(p <= t0, a0, jnp.where(p >= t1, a1, a_mid))
-        return jnp.clip(alpha, 0.0, 1.0)
+        alpha = jnp.clip(alpha, 0.0, 1.0)
+
+        return {"teacher": alpha, "pinns": 1.0 - alpha}
 
     # --------------------------
     # Corrected forward
@@ -289,24 +319,63 @@ class CorrPINNs:
         return teacher_loss, g[0]
 
     # --------------------------
+    # Wrapper for gradnorm: returns dict of losses for teacher and pinns (unweighted, unaggregated)
+    # --------------------------
+    def _losses(self, params_corr, base_params, batch):
+        teacher_loss, _g = self.get_teacher_loss(params_corr, batch)
+        pinns_loss, losses = self.get_pinns_loss(params_corr, base_params, batch)
+        return {"teacher": teacher_loss, "pinns": pinns_loss}
+
+    # --------------------------
+    # Compute weights of teacher and pinns losses using gradnorm
+    # --------------------------
+    @partial(jit, static_argnums=(0,))
+    def compute_weights(self, params_corr, base_params, batch):
+        # Compute the gradient of each loss w.r.t. the parameters
+        grads = jacrev(self._losses)(params_corr, base_params, batch)
+
+        # Compute the grad norm of each loss
+        grad_norm_dict = {}
+        for key, value in grads.items():
+            flattened_grad = ravel_pytree(value)[0]
+            grad_norm_dict[key] = jnp.linalg.norm(flattened_grad)
+
+        # Compute the mean of grad norms over all losses
+        mean_grad_norm = jnp.mean(jnp.stack(tree_leaves(grad_norm_dict)))
+        # Grad Norm Weighting
+        eps = 1e-12
+        w = tree_map(lambda x: mean_grad_norm / (x + eps), grad_norm_dict)
+        w = tree_map(lambda x: jnp.clip(x, 1e-2, 1e2), w)
+        
+        return w
+
+    @partial(pmap, axis_name="batch", static_broadcasted_argnums=(0,))
+    def update_weights(self, state, batch):
+        weights = self.compute_weights(state.params, state.base_params, batch)
+        weights = lax.pmean(weights, "batch")
+        state = state.apply_weights(weights=weights)
+        return state
+
+    # --------------------------
     # Total loss (mixture)
     # --------------------------
     @partial(jit, static_argnums=(0,))
-    def get_total_loss(self, params_corr, base_params, progress, batch):
+    def get_total_loss(self, params_corr, base_params, progress, weights, batch):
         """
         Total corr loss:
-          alpha(progress) * L_teacher + (1-alpha) * L_PINNs
+            w_teacher(progress) * adaptive_teacher_weight * L_teacher
+            + w_pinns(progress) * adaptive_pinns_weight * L_pinns
         """
         # base params are constant; ensure no grads flow
         base_params = lax.stop_gradient(base_params)
 
-        alpha = self.calc_alpha(progress)
-        L_teacher, _g = self.get_teacher_loss(params_corr, batch)
-        L_pinns, _losses = self.get_pinns_loss(params_corr, base_params, batch)
+        schedule_weights = self.calc_schedule_weights(progress)
+        losses = self._losses(params_corr, base_params, batch)
 
-        lambda_teacher = 300 # Heruistic constant scaling teacher loss to be roughly same magnitude as pinns loss at start of training; adjust as needed
-
-        return alpha * lambda_teacher * L_teacher + (1.0 - alpha) * L_pinns
+        weighted_losses = tree_map(lambda x, y, alpha: x * y * alpha, losses, weights, schedule_weights)
+        # Sum weighted losses
+        loss = tree_reduce(lambda x, y: x + y, weighted_losses)
+        return loss
 
     # --------------------------
     # Train step (pmapped)
@@ -325,7 +394,7 @@ class CorrPINNs:
         progress: scalar broadcast to all devices
         """
         def loss_fn(params_corr):
-            return self.get_total_loss(params_corr, state.base_params, progress, batch)
+            return self.get_total_loss(params_corr, state.base_params, progress, state.weights, batch)
 
         grads = grad(loss_fn)(state.params)
         grads = lax.pmean(grads, axis_name="batch")
@@ -360,9 +429,10 @@ class CorrPINNs:
         need_ic_res = bool(getattr(self.config.logging, "log_IC_res_loss", False))
         need_l2 = bool(getattr(self.config.logging, "log_L2error", False))
 
-        # alpha (cheap)
+        # alpha
         if need_alpha:
-            alpha = self.calc_alpha(jnp.array(progress, dtype=jnp.float32))
+            schedule_weights = self.calc_schedule_weights(jnp.array(progress, dtype=jnp.float32))
+            alpha = schedule_weights["teacher"]
             log_dict["alpha"] = alpha
         else:
             alpha = None

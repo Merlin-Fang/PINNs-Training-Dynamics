@@ -215,6 +215,10 @@ def train_corr(config: ml_collections.ConfigDict):
         progress = jnp.array(step / denom, dtype=jnp.float32)  # <-- make it an array (broadcastable)
         model.state = model.train_step(model.state, batch, progress)
 
+        # Grad Norm Weighting update
+        if step % config.corr.weighting_update_freq == 0 and step > 0:
+            model.state = model.update_weights(model.state, batch)
+
         if step > 0 and step % config.logging.freq == 0:
             state_host = jax.device_get(tree_map(lambda x: x[0], model.state))
             batch_host = jax.device_get(tree_map(lambda x: x[0], batch))
